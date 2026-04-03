@@ -1,0 +1,21 @@
+[package]
+name = "donglora-client"
+version = "0.1.0"
+edition = "2024"
+authors = ["Stephen Waits <steve@waits.net>"]
+license = "MIT"
+description = "DongLoRa host library — connect, configure, send/receive LoRa packets"
+repository = "https://github.com/swaits/donglora"
+keywords = ["lora", "radio", "usb", "serial"]
+categories = ["hardware-support"]
+
+[dependencies]
+anyhow = "1"
+cobs = "0.3"
+serialport = "4"
+tracing = "0.1"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

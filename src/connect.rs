@@ -1,0 +1,144 @@
+//! Connection auto-detection and mux client helpers.
+//!
+//! The [`connect`] function tries mux connections first (TCP via env var, then
+//! Unix socket), falling back to direct USB serial. This matches the Python
+//! client's `connect()` behavior.
+
+use std::time::Duration;
+
+use tracing::debug;
+
+use crate::client::Client;
+use crate::discovery;
+use crate::transport::{AnyTransport, MuxTransport, SerialTransport};
+
+/// Default read timeout for connections.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Resolve the mux socket path in priority order.
+///
+/// 1. `$DONGLORA_MUX` environment variable
+/// 2. `$XDG_RUNTIME_DIR/donglora/mux.sock`
+/// 3. `/tmp/donglora-mux.sock`
+pub fn default_socket_path() -> String {
+    if let Ok(env) = std::env::var("DONGLORA_MUX") {
+        return env;
+    }
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        return format!("{xdg}/donglora/mux.sock");
+    }
+    "/tmp/donglora-mux.sock".to_string()
+}
+
+/// Find an existing mux socket path, or `None` if no socket file exists.
+fn find_mux_socket() -> Option<String> {
+    if let Ok(env) = std::env::var("DONGLORA_MUX") {
+        if std::path::Path::new(&env).exists() {
+            return Some(env);
+        }
+        return None;
+    }
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        let p = format!("{xdg}/donglora/mux.sock");
+        if std::path::Path::new(&p).exists() {
+            return Some(p);
+        }
+    }
+    let p = "/tmp/donglora-mux.sock";
+    if std::path::Path::new(p).exists() {
+        return Some(p.to_string());
+    }
+    None
+}
+
+/// Connect to the mux daemon via Unix domain socket.
+#[cfg(unix)]
+pub fn mux_connect(
+    path: Option<&str>,
+    timeout: Duration,
+) -> anyhow::Result<Client<MuxTransport>> {
+    let path = match path {
+        Some(p) => p.to_string(),
+        None => find_mux_socket()
+            .ok_or_else(|| anyhow::anyhow!("no mux socket found"))?,
+    };
+    let transport = MuxTransport::unix(&path, timeout)?;
+    Ok(Client::new(transport))
+}
+
+/// Connect to the mux daemon via TCP.
+pub fn mux_tcp_connect(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> anyhow::Result<Client<MuxTransport>> {
+    let transport = MuxTransport::tcp(host, port, timeout)?;
+    Ok(Client::new(transport))
+}
+
+/// Auto-detect and connect to a DongLoRa device.
+///
+/// Priority:
+/// 1. `DONGLORA_MUX_TCP` env var → TCP mux connection
+/// 2. Unix socket mux (if socket file exists)
+/// 3. Direct USB serial (auto-detect by VID:PID, blocks until device appears)
+///
+/// If `port` is `Some`, skips mux detection and connects directly to that serial port.
+pub fn connect(
+    port: Option<&str>,
+    timeout: Duration,
+) -> anyhow::Result<Client<AnyTransport>> {
+    // If explicit port given, go direct
+    if let Some(port) = port {
+        debug!("opening serial port {port}");
+        let transport = SerialTransport::open(port, timeout)?;
+        return Ok(Client::new(AnyTransport::Serial(transport)));
+    }
+
+    // Try TCP mux via environment variable
+    if let Ok(tcp) = std::env::var("DONGLORA_MUX_TCP")
+        && let Some(transport) = try_tcp_mux(&tcp, timeout)
+    {
+        debug!("connected to TCP mux at {tcp}");
+        return Ok(Client::new(AnyTransport::Mux(transport)));
+    }
+
+    // Try Unix socket mux
+    #[cfg(unix)]
+    if let Some(path) = find_mux_socket() {
+        match MuxTransport::unix(&path, timeout) {
+            Ok(transport) => {
+                debug!("connected to mux socket at {path}");
+                return Ok(Client::new(AnyTransport::Mux(transport)));
+            }
+            Err(_) => {
+                // Stale socket or connection refused — fall through
+                debug!("mux socket at {path} not reachable, falling back to USB");
+            }
+        }
+    }
+
+    // Direct USB serial — auto-detect or wait
+    let port_path = discovery::find_port()
+        .unwrap_or_else(discovery::wait_for_device);
+    debug!("opening serial port {port_path}");
+    let transport = SerialTransport::open(&port_path, timeout)?;
+    Ok(Client::new(AnyTransport::Serial(transport)))
+}
+
+/// Convenience: connect with default timeout.
+pub fn connect_default() -> anyhow::Result<Client<AnyTransport>> {
+    connect(None, DEFAULT_TIMEOUT)
+}
+
+fn try_tcp_mux(addr: &str, timeout: Duration) -> Option<MuxTransport> {
+    let (host, port) = if let Some((h, p)) = addr.rsplit_once(':') {
+        let host = if h.is_empty() { "localhost" } else { h };
+        let port: u16 = p.parse().ok()?;
+        (host.to_string(), port)
+    } else {
+        let port: u16 = addr.parse().ok()?;
+        ("localhost".to_string(), port)
+    };
+    MuxTransport::tcp(&host, port, timeout).ok()
+}
