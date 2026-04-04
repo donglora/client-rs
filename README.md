@@ -31,7 +31,7 @@ loop {
 
 ## Dependencies
 
-- `cobs` — COBS framing
+- `ucobs` — COBS framing (same implementation as the firmware)
 - `serialport` — USB serial communication
 - `anyhow` — error handling
 - `tracing` — logging
