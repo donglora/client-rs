@@ -46,7 +46,10 @@ impl<T: Transport> Client<T> {
             let data = read_frame(&mut self.transport)?
                 .ok_or_else(|| anyhow::anyhow!("timeout waiting for response"))?;
             let resp = Response::from_bytes(&data)
-                .ok_or_else(|| anyhow::anyhow!("malformed response ({} bytes)", data.len()))?;
+                .ok_or_else(|| {
+                    let hex: Vec<String> = data.iter().map(|b| format!("{b:02x}")).collect();
+                    anyhow::anyhow!("malformed response ({} bytes): [{}]", data.len(), hex.join(" "))
+                })?;
             if resp.is_rx_packet() {
                 self.buffer_rx(resp);
                 continue;
@@ -71,7 +74,7 @@ impl<T: Transport> Client<T> {
         if resp.is_rx_packet() {
             Ok(Some(resp))
         } else {
-            // Non-RxPacket unsolicited response — shouldn't happen, discard
+            tracing::warn!("recv: discarding unexpected unsolicited response: {resp:?}");
             Ok(None)
         }
     }
@@ -87,18 +90,22 @@ impl<T: Transport> Client<T> {
         self.transport
             .set_timeout(std::time::Duration::from_millis(10))?;
 
-        loop {
-            let Some(data) = read_frame(&mut self.transport)? else {
-                break;
-            };
-            if let Some(resp) = Response::from_bytes(&data)
-                && resp.is_rx_packet()
-            {
-                packets.push(resp);
+        let result: anyhow::Result<()> = (|| {
+            loop {
+                let Some(data) = read_frame(&mut self.transport)? else {
+                    return Ok(());
+                };
+                if let Some(resp) = Response::from_bytes(&data)
+                    && resp.is_rx_packet()
+                {
+                    packets.push(resp);
+                }
             }
-        }
+        })();
 
+        // Always restore timeout, even if the loop errored
         self.transport.set_timeout(old_timeout)?;
+        result?;
         Ok(packets)
     }
 

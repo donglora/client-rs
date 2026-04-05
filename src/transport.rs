@@ -20,6 +20,7 @@ pub trait Transport: Read + Write + Send {
 /// Direct USB serial port connection to a DongLoRa dongle.
 pub struct SerialTransport {
     port: Box<dyn serialport::SerialPort>,
+    timeout: Duration,
 }
 
 impl SerialTransport {
@@ -31,7 +32,7 @@ impl SerialTransport {
             .timeout(timeout)
             .open()
             .map_err(|e| anyhow::anyhow!("failed to open serial port {path}: {e}"))?;
-        Ok(Self { port })
+        Ok(Self { port, timeout })
     }
 
     /// Clear the serial input buffer.
@@ -62,13 +63,13 @@ impl Transport for SerialTransport {
     fn set_timeout(&mut self, timeout: Duration) -> anyhow::Result<()> {
         self.port
             .set_timeout(timeout)
-            .map_err(|e| anyhow::anyhow!("failed to set serial timeout: {e}"))
+            .map_err(|e| anyhow::anyhow!("failed to set serial timeout: {e}"))?;
+        self.timeout = timeout;
+        Ok(())
     }
 
     fn timeout(&self) -> Duration {
-        // serialport doesn't have a getter, so we'd need to track it ourselves.
-        // For now, return a sensible default. The actual timeout is set on the port.
-        Duration::from_secs(2)
+        self.timeout
     }
 }
 
@@ -94,7 +95,10 @@ impl MuxTransport {
             .map_err(|e| anyhow::anyhow!("failed to connect to mux socket {path}: {e}"))?;
         stream
             .set_read_timeout(Some(timeout))
-            .map_err(|e| anyhow::anyhow!("failed to set socket timeout: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("failed to set socket read timeout: {e}"))?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|e| anyhow::anyhow!("failed to set socket write timeout: {e}"))?;
         Ok(Self {
             stream: MuxStream::Unix(stream),
             timeout,
@@ -103,12 +107,22 @@ impl MuxTransport {
 
     /// Connect to the mux daemon via TCP.
     pub fn tcp(host: &str, port: u16, timeout: Duration) -> anyhow::Result<Self> {
+        use std::net::ToSocketAddrs;
+
         let addr = format!("{host}:{port}");
-        let stream = std::net::TcpStream::connect(&addr)
+        let sock_addr = addr
+            .to_socket_addrs()
+            .map_err(|e| anyhow::anyhow!("failed to resolve mux address {addr}: {e}"))?
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no addresses found for {addr}"))?;
+        let stream = std::net::TcpStream::connect_timeout(&sock_addr, timeout)
             .map_err(|e| anyhow::anyhow!("failed to connect to mux at {addr}: {e}"))?;
         stream
             .set_read_timeout(Some(timeout))
-            .map_err(|e| anyhow::anyhow!("failed to set TCP timeout: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("failed to set TCP read timeout: {e}"))?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|e| anyhow::anyhow!("failed to set TCP write timeout: {e}"))?;
         Ok(Self {
             stream: MuxStream::Tcp(stream),
             timeout,
@@ -149,8 +163,12 @@ impl Transport for MuxTransport {
         self.timeout = timeout;
         let result = match &self.stream {
             #[cfg(unix)]
-            MuxStream::Unix(s) => s.set_read_timeout(Some(timeout)),
-            MuxStream::Tcp(s) => s.set_read_timeout(Some(timeout)),
+            MuxStream::Unix(s) => s
+                .set_read_timeout(Some(timeout))
+                .and_then(|()| s.set_write_timeout(Some(timeout))),
+            MuxStream::Tcp(s) => s
+                .set_read_timeout(Some(timeout))
+                .and_then(|()| s.set_write_timeout(Some(timeout))),
         };
         result.map_err(|e| anyhow::anyhow!("failed to set timeout: {e}"))
     }

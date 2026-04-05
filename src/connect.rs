@@ -131,6 +131,36 @@ pub fn connect_default() -> anyhow::Result<Client<AnyTransport>> {
     connect(None, DEFAULT_TIMEOUT)
 }
 
+/// Connect to a mux daemon only (TCP via env var, then Unix socket).
+///
+/// Unlike [`connect`], this **never** falls back to direct USB serial.
+/// Returns an error if no mux is reachable — the caller can retry with backoff.
+///
+/// This is the Rust equivalent of the Python client's "sticky mux" behavior:
+/// once you decide to use the mux, you stay on the mux.
+pub fn connect_mux_auto(timeout: Duration) -> anyhow::Result<Client<AnyTransport>> {
+    // Try TCP mux via environment variable.
+    if let Ok(tcp) = std::env::var("DONGLORA_MUX_TCP")
+        && let Some(transport) = try_tcp_mux(&tcp, timeout)
+    {
+        debug!("connected to TCP mux at {tcp}");
+        return Ok(Client::new(AnyTransport::Mux(transport)));
+    }
+
+    // Try Unix socket mux.
+    #[cfg(unix)]
+    {
+        let path = find_mux_socket()
+            .ok_or_else(|| anyhow::anyhow!("no mux socket found"))?;
+        let transport = MuxTransport::unix(&path, timeout)?;
+        debug!("connected to mux socket at {path}");
+        Ok(Client::new(AnyTransport::Mux(transport)))
+    }
+
+    #[cfg(not(unix))]
+    anyhow::bail!("mux-only mode requires Unix socket support or DONGLORA_MUX_TCP")
+}
+
 fn try_tcp_mux(addr: &str, timeout: Duration) -> Option<MuxTransport> {
     let (host, port) = if let Some((h, p)) = addr.rsplit_once(':') {
         let host = if h.is_empty() { "localhost" } else { h };

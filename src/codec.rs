@@ -107,9 +107,15 @@ pub fn read_frame(reader: &mut dyn std::io::Read) -> anyhow::Result<Option<Vec<u
                 }
                 buf.push(byte[0]);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
                 return Ok(None);
             }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e.into()),
         }
     }
@@ -273,5 +279,52 @@ mod tests {
         let encoded = encode_frame(&data);
         let decoded = decode_frame(&encoded[..encoded.len() - 1]);
         assert_eq!(decoded, Some(data));
+    }
+
+    #[test]
+    fn config_response_cobs_roundtrip() {
+        // Exact Config response bytes: tag=1, freq=910525000, bw=62.5k, sf=7,
+        // cr=5, sync=0x3444, tx=22dBm, preamble=16, cad=1
+        // Note: preamble high byte is 0x00 — tests COBS with embedded zero.
+        let data = vec![
+            0x01, 0x48, 0x82, 0x45, 0x36, 0x06, 0x07, 0x05,
+            0x44, 0x34, 0x16, 0x10, 0x00, 0x01,
+        ];
+        assert_eq!(data.len(), 14);
+        let encoded = encode_frame(&data);
+        let decoded = decode_frame(&encoded[..encoded.len() - 1]);
+        assert_eq!(decoded, Some(data));
+    }
+
+    #[test]
+    fn config_response_cobs_roundtrip_cad_zero() {
+        // Same but with cad=0 — two consecutive 0x00 bytes at end.
+        let data = vec![
+            0x01, 0x48, 0x82, 0x45, 0x36, 0x06, 0x07, 0x05,
+            0x44, 0x34, 0x16, 0x10, 0x00, 0x00,
+        ];
+        assert_eq!(data.len(), 14);
+        let encoded = encode_frame(&data);
+        let decoded = decode_frame(&encoded[..encoded.len() - 1]);
+        assert_eq!(decoded, Some(data));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_frame_socket_timeout_returns_none() {
+        use std::os::unix::net::UnixStream;
+        use std::time::Duration;
+
+        let (mut a, _b) = UnixStream::pair().unwrap();
+        a.set_read_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
+
+        // No data written to _b, so read on `a` will time out with WouldBlock on Linux.
+        let result = read_frame(&mut a);
+        assert!(
+            result.is_ok(),
+            "socket timeout should be Ok(None), got: {result:?}"
+        );
+        assert!(result.unwrap().is_none());
     }
 }

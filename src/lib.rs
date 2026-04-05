@@ -31,7 +31,7 @@ pub mod transport;
 // Flat re-exports for convenience
 pub use client::Client;
 pub use codec::{decode_frame, encode_frame, read_frame, FrameReader};
-pub use connect::{connect, connect_default, default_socket_path};
+pub use connect::{connect, connect_default, connect_mux_auto, default_socket_path};
 pub use discovery::{find_port, wait_for_device, USB_PID, USB_VID};
 pub use protocol::{
     Bandwidth, Command, ErrorCode, RadioConfig, Response, CMD_TAG_SET_CONFIG, CMD_TAG_START_RX,
