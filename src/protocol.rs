@@ -1,7 +1,7 @@
 //! Wire protocol types and fixed-size little-endian serialization.
 //!
 //! Mirrors the firmware's `protocol.rs` using std types. Every integer is
-//! fixed-width LE. See `firmware/PROTOCOL.md` for the full specification.
+//! fixed-width LE.
 
 /// Maximum LoRa payload size in bytes.
 pub const MAX_PAYLOAD: usize = 256;
@@ -156,10 +156,7 @@ pub enum Command {
     SetConfig(RadioConfig),
     StartRx,
     StopRx,
-    Transmit {
-        config: Option<RadioConfig>,
-        payload: Vec<u8>,
-    },
+    Transmit { config: Option<RadioConfig>, payload: Vec<u8> },
     DisplayOn,
     DisplayOff,
     GetMac,
@@ -241,10 +238,7 @@ impl Command {
                 if rest.len() < data_start + len || len > MAX_PAYLOAD {
                     return None;
                 }
-                Some(Self::Transmit {
-                    config,
-                    payload: rest[data_start..data_start + len].to_vec(),
-                })
+                Some(Self::Transmit { config, payload: rest[data_start..data_start + len].to_vec() })
             }
             6 => Some(Self::DisplayOn),
             7 => Some(Self::DisplayOff),
@@ -283,6 +277,8 @@ impl ErrorCode {
     }
 }
 
+impl std::error::Error for ErrorCode {}
+
 impl std::fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -303,11 +299,7 @@ impl std::fmt::Display for ErrorCode {
 pub enum Response {
     Pong,
     Config(RadioConfig),
-    RxPacket {
-        rssi: i16,
-        snr: i16,
-        payload: Vec<u8>,
-    },
+    RxPacket { rssi: i16, snr: i16, payload: Vec<u8> },
     TxDone,
     Ok,
     Error(ErrorCode),
@@ -378,11 +370,7 @@ impl Response {
                 if rest.len() < 6 + len || len > MAX_PAYLOAD {
                     return None;
                 }
-                Some(Self::RxPacket {
-                    rssi,
-                    snr,
-                    payload: rest[6..6 + len].to_vec(),
-                })
+                Some(Self::RxPacket { rssi, snr, payload: rest[6..6 + len].to_vec() })
             }
             3 => Some(Self::TxDone),
             4 => Some(Self::Ok),
@@ -403,6 +391,7 @@ impl Response {
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -494,30 +483,21 @@ mod tests {
 
     #[test]
     fn command_transmit_no_config_roundtrip() {
-        let cmd = Command::Transmit {
-            config: None,
-            payload: b"hello".to_vec(),
-        };
+        let cmd = Command::Transmit { config: None, payload: b"hello".to_vec() };
         let bytes = cmd.to_bytes();
         assert_eq!(Command::from_bytes(&bytes), Some(cmd));
     }
 
     #[test]
     fn command_transmit_with_config_roundtrip() {
-        let cmd = Command::Transmit {
-            config: Some(make_config()),
-            payload: b"test".to_vec(),
-        };
+        let cmd = Command::Transmit { config: Some(make_config()), payload: b"test".to_vec() };
         let bytes = cmd.to_bytes();
         assert_eq!(Command::from_bytes(&bytes), Some(cmd));
     }
 
     #[test]
     fn command_transmit_empty_payload() {
-        let cmd = Command::Transmit {
-            config: None,
-            payload: vec![],
-        };
+        let cmd = Command::Transmit { config: None, payload: vec![] };
         let bytes = cmd.to_bytes();
         assert_eq!(Command::from_bytes(&bytes), Some(cmd));
     }
@@ -572,22 +552,14 @@ mod tests {
 
     #[test]
     fn response_rx_packet_roundtrip() {
-        let resp = Response::RxPacket {
-            rssi: -80,
-            snr: 10,
-            payload: b"data".to_vec(),
-        };
+        let resp = Response::RxPacket { rssi: -80, snr: 10, payload: b"data".to_vec() };
         let bytes = resp.to_bytes();
         assert_eq!(Response::from_bytes(&bytes), Some(resp));
     }
 
     #[test]
     fn response_rx_packet_empty_payload() {
-        let resp = Response::RxPacket {
-            rssi: -120,
-            snr: -5,
-            payload: vec![],
-        };
+        let resp = Response::RxPacket { rssi: -120, snr: -5, payload: vec![] };
         let bytes = resp.to_bytes();
         assert_eq!(Response::from_bytes(&bytes), Some(resp));
     }
@@ -619,10 +591,7 @@ mod tests {
     fn response_tags() {
         assert_eq!(Response::Pong.tag(), 0);
         assert_eq!(Response::Config(make_config()).tag(), 1);
-        assert_eq!(
-            Response::RxPacket { rssi: 0, snr: 0, payload: vec![] }.tag(),
-            2
-        );
+        assert_eq!(Response::RxPacket { rssi: 0, snr: 0, payload: vec![] }.tag(), 2);
         assert_eq!(Response::TxDone.tag(), 3);
         assert_eq!(Response::Ok.tag(), 4);
         assert_eq!(Response::Error(ErrorCode::RadioBusy).tag(), 5);
@@ -685,9 +654,6 @@ mod tests {
         let cmd = Command::SetConfig(cfg);
         let bytes = cmd.to_bytes();
         // Expected: 02 C0 CA 89 36 07 07 05 24 14 80 00 00 01
-        assert_eq!(
-            bytes,
-            [0x02, 0xC0, 0xCA, 0x89, 0x36, 0x07, 0x07, 0x05, 0x24, 0x14, 0x80, 0x00, 0x00, 0x01]
-        );
+        assert_eq!(bytes, [0x02, 0xC0, 0xCA, 0x89, 0x36, 0x07, 0x07, 0x05, 0x24, 0x14, 0x80, 0x00, 0x00, 0x01]);
     }
 }

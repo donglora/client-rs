@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.0 — 2026-04-07
+
+### Features
+
+- **Ping-on-connect validation** — all connect functions automatically ping the
+  device after connecting and reject non-DongLoRa devices within 200ms. No more
+  accidentally talking LoRa protocol to an Arduino.
+- **`try_connect(timeout)`** — non-blocking alternative to `connect()`. Returns
+  an error immediately if no DongLoRa device is found instead of blocking
+  indefinitely.
+- **USB-UART bridge chip fallback** — `find_port()` now detects boards using
+  CP2102, CH9102, CH340, or FT232R bridge chips (validated via ping).
+- **Payload size validation** — `transmit()` rejects payloads exceeding 256
+  bytes with a clear error before hitting the wire.
+- **`ErrorCode` implements `std::error::Error`** — usable in error chains.
+
+### Breaking changes
+
+- Wire-level tag constants (`CMD_TAG_*`, `RESP_TAG_*`, `ERROR_INVALID_CONFIG`)
+  removed from the top-level re-exports. Access them via
+  `donglora_client::protocol::*` if needed.
+- `connect()` and friends now validate the device on connect. Code that
+  previously connected to non-DongLoRa serial devices will now get an error.
+
+### Fixes
+
+- Fixed repository URL in crate metadata.
+- `drain_rx` no longer swallows the original error if timeout restore also fails.
+- Removed dead `firmware/PROTOCOL.md` reference from docs.
+
 ## 0.1.0 — 2026-04-06
 
 Initial release.

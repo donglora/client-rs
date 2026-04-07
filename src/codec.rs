@@ -47,9 +47,7 @@ pub struct FrameReader {
 impl FrameReader {
     /// Create a new empty frame reader.
     pub fn new() -> Self {
-        Self {
-            buf: Vec::with_capacity(512),
-        }
+        Self { buf: Vec::with_capacity(512) }
     }
 
     /// Feed raw bytes and return all complete decoded frames.
@@ -107,12 +105,7 @@ pub fn read_frame(reader: &mut dyn std::io::Read) -> anyhow::Result<Option<Vec<u
                 }
                 buf.push(byte[0]);
             }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {
                 return Ok(None);
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -124,14 +117,13 @@ pub fn read_frame(reader: &mut dyn std::io::Read) -> anyhow::Result<Option<Vec<u
         return Ok(None);
     }
 
-    decode_frame(&buf)
-        .map(Some)
-        .ok_or_else(|| anyhow::anyhow!("COBS decode error"))
+    decode_frame(&buf).map(Some).ok_or_else(|| anyhow::anyhow!("COBS decode error"))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -154,7 +146,7 @@ mod tests {
         // This is equivalent to an empty inter-frame gap and is correctly
         // skipped by both FrameReader and read_frame.
         let encoded = encode_frame(b"");
-        assert_eq!(*encoded.last().unwrap(), 0x00);
+        assert_eq!(encoded.last(), Some(&0x00));
     }
 
     #[test]
@@ -286,10 +278,7 @@ mod tests {
         // Exact Config response bytes: tag=1, freq=910525000, bw=62.5k, sf=7,
         // cr=5, sync=0x3444, tx=22dBm, preamble=16, cad=1
         // Note: preamble high byte is 0x00 — tests COBS with embedded zero.
-        let data = vec![
-            0x01, 0x48, 0x82, 0x45, 0x36, 0x06, 0x07, 0x05,
-            0x44, 0x34, 0x16, 0x10, 0x00, 0x01,
-        ];
+        let data = vec![0x01, 0x48, 0x82, 0x45, 0x36, 0x06, 0x07, 0x05, 0x44, 0x34, 0x16, 0x10, 0x00, 0x01];
         assert_eq!(data.len(), 14);
         let encoded = encode_frame(&data);
         let decoded = decode_frame(&encoded[..encoded.len() - 1]);
@@ -299,10 +288,7 @@ mod tests {
     #[test]
     fn config_response_cobs_roundtrip_cad_zero() {
         // Same but with cad=0 — two consecutive 0x00 bytes at end.
-        let data = vec![
-            0x01, 0x48, 0x82, 0x45, 0x36, 0x06, 0x07, 0x05,
-            0x44, 0x34, 0x16, 0x10, 0x00, 0x00,
-        ];
+        let data = vec![0x01, 0x48, 0x82, 0x45, 0x36, 0x06, 0x07, 0x05, 0x44, 0x34, 0x16, 0x10, 0x00, 0x00];
         assert_eq!(data.len(), 14);
         let encoded = encode_frame(&data);
         let decoded = decode_frame(&encoded[..encoded.len() - 1]);
@@ -316,15 +302,11 @@ mod tests {
         use std::time::Duration;
 
         let (mut a, _b) = UnixStream::pair().unwrap();
-        a.set_read_timeout(Some(Duration::from_millis(10)))
-            .unwrap();
+        a.set_read_timeout(Some(Duration::from_millis(10))).unwrap();
 
         // No data written to _b, so read on `a` will time out with WouldBlock on Linux.
         let result = read_frame(&mut a);
-        assert!(
-            result.is_ok(),
-            "socket timeout should be Ok(None), got: {result:?}"
-        );
+        assert!(result.is_ok(), "socket timeout should be Ok(None), got: {result:?}");
         assert!(result.unwrap().is_none());
     }
 }

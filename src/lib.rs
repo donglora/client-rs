@@ -1,7 +1,7 @@
 //! DongLoRa host library — connect, configure, send/receive LoRa packets.
 //!
 //! Implements the DongLoRa USB protocol (COBS-framed fixed-size LE).
-//! See `firmware/PROTOCOL.md` for the full specification.
+//! See the [`protocol`] module for wire types and constants.
 //!
 //! # Quick start
 //!
@@ -9,7 +9,6 @@
 //! use donglora_client::*;
 //!
 //! let mut client = connect_default()?;
-//! client.ping()?;
 //! client.set_config(RadioConfig::default())?;
 //! client.start_rx()?;
 //!
@@ -30,13 +29,12 @@ pub mod transport;
 
 // Flat re-exports for convenience
 pub use client::Client;
-pub use codec::{decode_frame, encode_frame, read_frame, FrameReader};
-pub use connect::{connect, connect_default, connect_mux_auto, default_socket_path};
-pub use discovery::{find_port, wait_for_device, USB_PID, USB_VID};
+pub use codec::{FrameReader, decode_frame, encode_frame, read_frame};
+pub use connect::{connect, connect_default, connect_mux_auto, default_socket_path, try_connect};
+pub use discovery::{USB_PID, USB_VID, find_port, wait_for_device};
 pub use protocol::{
-    Bandwidth, Command, ErrorCode, RadioConfig, Response, CMD_TAG_SET_CONFIG, CMD_TAG_START_RX,
-    CMD_TAG_STOP_RX, ERROR_INVALID_CONFIG, MAX_PAYLOAD, PREAMBLE_DEFAULT, RADIO_CONFIG_SIZE,
-    RESP_TAG_ERROR, RESP_TAG_OK, RESP_TAG_RX_PACKET, TX_POWER_MAX,
+    Bandwidth, Command, ErrorCode, MAX_PAYLOAD, PREAMBLE_DEFAULT, RADIO_CONFIG_SIZE, RadioConfig, Response,
+    TX_POWER_MAX,
 };
 pub use transport::{AnyTransport, MuxTransport, SerialTransport, Transport};
 

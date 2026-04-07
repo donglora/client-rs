@@ -53,27 +53,23 @@ fn find_mux_socket() -> Option<String> {
 
 /// Connect to the mux daemon via Unix domain socket.
 #[cfg(unix)]
-pub fn mux_connect(
-    path: Option<&str>,
-    timeout: Duration,
-) -> anyhow::Result<Client<MuxTransport>> {
+pub fn mux_connect(path: Option<&str>, timeout: Duration) -> anyhow::Result<Client<MuxTransport>> {
     let path = match path {
         Some(p) => p.to_string(),
-        None => find_mux_socket()
-            .ok_or_else(|| anyhow::anyhow!("no mux socket found"))?,
+        None => find_mux_socket().ok_or_else(|| anyhow::anyhow!("no mux socket found"))?,
     };
     let transport = MuxTransport::unix(&path, timeout)?;
-    Ok(Client::new(transport))
+    let mut client = Client::new(transport);
+    client.validate()?;
+    Ok(client)
 }
 
 /// Connect to the mux daemon via TCP.
-pub fn mux_tcp_connect(
-    host: &str,
-    port: u16,
-    timeout: Duration,
-) -> anyhow::Result<Client<MuxTransport>> {
+pub fn mux_tcp_connect(host: &str, port: u16, timeout: Duration) -> anyhow::Result<Client<MuxTransport>> {
     let transport = MuxTransport::tcp(host, port, timeout)?;
-    Ok(Client::new(transport))
+    let mut client = Client::new(transport);
+    client.validate()?;
+    Ok(client)
 }
 
 /// Auto-detect and connect to a DongLoRa device.
@@ -84,15 +80,14 @@ pub fn mux_tcp_connect(
 /// 3. Direct USB serial (auto-detect by VID:PID, blocks until device appears)
 ///
 /// If `port` is `Some`, skips mux detection and connects directly to that serial port.
-pub fn connect(
-    port: Option<&str>,
-    timeout: Duration,
-) -> anyhow::Result<Client<AnyTransport>> {
+pub fn connect(port: Option<&str>, timeout: Duration) -> anyhow::Result<Client<AnyTransport>> {
     // If explicit port given, go direct
     if let Some(port) = port {
         debug!("opening serial port {port}");
         let transport = SerialTransport::open(port, timeout)?;
-        return Ok(Client::new(AnyTransport::Serial(transport)));
+        let mut client = Client::new(AnyTransport::Serial(transport));
+        client.validate()?;
+        return Ok(client);
     }
 
     // Try TCP mux via environment variable
@@ -100,7 +95,9 @@ pub fn connect(
         && let Some(transport) = try_tcp_mux(&tcp, timeout)
     {
         debug!("connected to TCP mux at {tcp}");
-        return Ok(Client::new(AnyTransport::Mux(transport)));
+        let mut client = Client::new(AnyTransport::Mux(transport));
+        client.validate()?;
+        return Ok(client);
     }
 
     // Try Unix socket mux
@@ -109,7 +106,11 @@ pub fn connect(
         match MuxTransport::unix(&path, timeout) {
             Ok(transport) => {
                 debug!("connected to mux socket at {path}");
-                return Ok(Client::new(AnyTransport::Mux(transport)));
+                let mut client = Client::new(AnyTransport::Mux(transport));
+                if client.validate().is_ok() {
+                    return Ok(client);
+                }
+                debug!("mux at {path} did not validate, falling back to USB");
             }
             Err(_) => {
                 // Stale socket or connection refused — fall through
@@ -119,11 +120,12 @@ pub fn connect(
     }
 
     // Direct USB serial — auto-detect or wait
-    let port_path = discovery::find_port()
-        .unwrap_or_else(discovery::wait_for_device);
+    let port_path = discovery::find_port().unwrap_or_else(discovery::wait_for_device);
     debug!("opening serial port {port_path}");
     let transport = SerialTransport::open(&port_path, timeout)?;
-    Ok(Client::new(AnyTransport::Serial(transport)))
+    let mut client = Client::new(AnyTransport::Serial(transport));
+    client.validate()?;
+    Ok(client)
 }
 
 /// Convenience: connect with default timeout.
@@ -144,21 +146,69 @@ pub fn connect_mux_auto(timeout: Duration) -> anyhow::Result<Client<AnyTransport
         && let Some(transport) = try_tcp_mux(&tcp, timeout)
     {
         debug!("connected to TCP mux at {tcp}");
-        return Ok(Client::new(AnyTransport::Mux(transport)));
+        let mut client = Client::new(AnyTransport::Mux(transport));
+        client.validate()?;
+        return Ok(client);
     }
 
     // Try Unix socket mux.
     #[cfg(unix)]
     {
-        let path = find_mux_socket()
-            .ok_or_else(|| anyhow::anyhow!("no mux socket found"))?;
+        let path = find_mux_socket().ok_or_else(|| anyhow::anyhow!("no mux socket found"))?;
         let transport = MuxTransport::unix(&path, timeout)?;
         debug!("connected to mux socket at {path}");
-        Ok(Client::new(AnyTransport::Mux(transport)))
+        let mut client = Client::new(AnyTransport::Mux(transport));
+        client.validate()?;
+        Ok(client)
     }
 
     #[cfg(not(unix))]
     anyhow::bail!("mux-only mode requires Unix socket support or DONGLORA_MUX_TCP")
+}
+
+/// Like [`connect`] but returns an error instead of blocking when no USB
+/// device is present. Suitable for callers with their own retry logic.
+///
+/// Runs the same fallback chain as `connect(None, timeout)` — TCP mux, Unix
+/// socket mux, then direct USB serial — but uses a single non-blocking scan
+/// instead of polling indefinitely for a USB device.
+pub fn try_connect(timeout: Duration) -> anyhow::Result<Client<AnyTransport>> {
+    // Try TCP mux via environment variable
+    if let Ok(tcp) = std::env::var("DONGLORA_MUX_TCP")
+        && let Some(transport) = try_tcp_mux(&tcp, timeout)
+    {
+        debug!("connected to TCP mux at {tcp}");
+        let mut client = Client::new(AnyTransport::Mux(transport));
+        client.validate()?;
+        return Ok(client);
+    }
+
+    // Try Unix socket mux
+    #[cfg(unix)]
+    if let Some(path) = find_mux_socket() {
+        match MuxTransport::unix(&path, timeout) {
+            Ok(transport) => {
+                debug!("connected to mux socket at {path}");
+                let mut client = Client::new(AnyTransport::Mux(transport));
+                if client.validate().is_ok() {
+                    return Ok(client);
+                }
+                debug!("mux socket at {path} did not validate, falling back to USB");
+            }
+            Err(_) => {
+                debug!("mux socket at {path} not reachable, falling back to USB");
+            }
+        }
+    }
+
+    // Direct USB serial — single non-blocking scan
+    let port_path =
+        discovery::find_port().ok_or_else(|| anyhow::anyhow!("no DongLoRa device found (no mux, no USB device)"))?;
+    debug!("opening serial port {port_path}");
+    let transport = SerialTransport::open(&port_path, timeout)?;
+    let mut client = Client::new(AnyTransport::Serial(transport));
+    client.validate()?;
+    Ok(client)
 }
 
 fn try_tcp_mux(addr: &str, timeout: Duration) -> Option<MuxTransport> {

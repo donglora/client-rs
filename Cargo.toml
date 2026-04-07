@@ -1,13 +1,16 @@
 [package]
 name = "donglora-client"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Stephen Waits <steve@waits.net>"]
 license = "MIT"
 description = "DongLoRa host library — connect, configure, send/receive LoRa packets"
-repository = "https://github.com/swaits/donglora"
+repository = "https://github.com/donglora/client-rs"
+homepage = "https://github.com/donglora/client-rs"
 keywords = ["lora", "radio", "usb", "serial"]
 categories = ["hardware-support"]
+exclude = ["CLAUDE_TODO.md", "deny.toml", "justfile", "mise.toml", "rustfmt.toml", ".jj"]
 
 [dependencies]
 anyhow = "1"
