@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-04-07
+
+### Fixed
+
+- **`connect()` no longer falls through from mux to USB serial.** If a mux
+  socket file exists, `connect(None, timeout)` and `try_connect(timeout)` now
+  commit to the mux and return an error if the mux is unreachable — instead of
+  silently bypassing it and grabbing the USB port directly. This prevents a
+  race condition where a client could steal the serial port from the mux during
+  reconnect. Callers with explicit `port = Some(...)` are unaffected.
+
 ## 0.2.0 — 2026-04-07
 
 ### Features
