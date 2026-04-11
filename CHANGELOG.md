@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Once a mux connection succeeds, all future `connect()` calls in the same
+  process only try the mux. `connect()` blocks waiting for the socket to
+  reappear; `try_connect()` returns an error so callers can retry with backoff.
+  Prevents clients from stealing the serial port during mux restarts.
+
 ## 0.2.1 — 2026-04-07
 
 ### Fixed

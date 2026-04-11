@@ -4,13 +4,18 @@
 //! Unix socket), falling back to direct USB serial. This matches the Python
 //! client's `connect()` behavior.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::client::Client;
 use crate::discovery;
 use crate::transport::{AnyTransport, MuxTransport, SerialTransport};
+
+/// Set once this process connects via mux. All future `connect()` calls
+/// will only try mux, never fall through to direct serial.
+static USED_MUX: AtomicBool = AtomicBool::new(false);
 
 /// Default read timeout for connections.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -90,29 +95,42 @@ pub fn connect(port: Option<&str>, timeout: Duration) -> anyhow::Result<Client<A
         return Ok(client);
     }
 
-    // Try TCP mux via environment variable
-    if let Ok(tcp) = std::env::var("DONGLORA_MUX_TCP")
-        && let Some(transport) = try_tcp_mux(&tcp, timeout)
-    {
-        debug!("connected to TCP mux at {tcp}");
-        let mut client = Client::new(AnyTransport::Mux(transport));
-        client.validate()?;
-        return Ok(client);
-    }
-
-    // Try Unix socket mux — if a mux socket exists, commit to it. Never fall through
-    // to USB serial when a mux is (or was) running. This prevents a client from
-    // stealing the serial port while the mux is temporarily reconnecting.
-    #[cfg(unix)]
-    if let Some(path) = find_mux_socket() {
-        debug!("mux socket found at {path} — connecting via mux only");
+    // Previously connected via mux — stay on mux, wait if necessary
+    if USED_MUX.load(Ordering::Relaxed) {
+        let path = default_socket_path();
+        while !std::path::Path::new(&path).exists() {
+            info!("Waiting for mux at {path} ...");
+            std::thread::sleep(Duration::from_millis(500));
+        }
         let transport = MuxTransport::unix(&path, timeout)?;
         let mut client = Client::new(AnyTransport::Mux(transport));
         client.validate()?;
         return Ok(client);
     }
 
-    // Direct USB serial — only reached when no mux socket exists at all
+    // Try TCP mux via environment variable
+    if let Ok(tcp) = std::env::var("DONGLORA_MUX_TCP")
+        && let Some(transport) = try_tcp_mux(&tcp, timeout)
+    {
+        debug!("connected to TCP mux at {tcp}");
+        USED_MUX.store(true, Ordering::Relaxed);
+        let mut client = Client::new(AnyTransport::Mux(transport));
+        client.validate()?;
+        return Ok(client);
+    }
+
+    // Try Unix socket mux — if a mux socket exists, commit to it
+    #[cfg(unix)]
+    if let Some(path) = find_mux_socket() {
+        debug!("mux socket found at {path} — connecting via mux only");
+        USED_MUX.store(true, Ordering::Relaxed);
+        let transport = MuxTransport::unix(&path, timeout)?;
+        let mut client = Client::new(AnyTransport::Mux(transport));
+        client.validate()?;
+        return Ok(client);
+    }
+
+    // No mux found on first attempt — direct USB serial
     let port_path = discovery::find_port().unwrap_or_else(discovery::wait_for_device);
     debug!("opening serial port {port_path}");
     let transport = SerialTransport::open(&port_path, timeout)?;
@@ -166,27 +184,38 @@ pub fn connect_mux_auto(timeout: Duration) -> anyhow::Result<Client<AnyTransport
 /// socket mux, then direct USB serial — but uses a single non-blocking scan
 /// instead of polling indefinitely for a USB device.
 pub fn try_connect(timeout: Duration) -> anyhow::Result<Client<AnyTransport>> {
-    // Try TCP mux via environment variable
-    if let Ok(tcp) = std::env::var("DONGLORA_MUX_TCP")
-        && let Some(transport) = try_tcp_mux(&tcp, timeout)
-    {
-        debug!("connected to TCP mux at {tcp}");
-        let mut client = Client::new(AnyTransport::Mux(transport));
-        client.validate()?;
-        return Ok(client);
-    }
-
-    // Try Unix socket mux — commit to it if socket exists (same rationale as connect())
-    #[cfg(unix)]
-    if let Some(path) = find_mux_socket() {
-        debug!("mux socket found at {path} — connecting via mux only");
+    // Previously connected via mux — only try mux
+    if USED_MUX.load(Ordering::Relaxed) {
+        let path = find_mux_socket().ok_or_else(|| anyhow::anyhow!("mux not available (waiting for restart)"))?;
         let transport = MuxTransport::unix(&path, timeout)?;
         let mut client = Client::new(AnyTransport::Mux(transport));
         client.validate()?;
         return Ok(client);
     }
 
-    // Direct USB serial — single non-blocking scan (only when no mux socket exists)
+    // Try TCP mux via environment variable
+    if let Ok(tcp) = std::env::var("DONGLORA_MUX_TCP")
+        && let Some(transport) = try_tcp_mux(&tcp, timeout)
+    {
+        debug!("connected to TCP mux at {tcp}");
+        USED_MUX.store(true, Ordering::Relaxed);
+        let mut client = Client::new(AnyTransport::Mux(transport));
+        client.validate()?;
+        return Ok(client);
+    }
+
+    // Try Unix socket mux — commit to it if socket exists
+    #[cfg(unix)]
+    if let Some(path) = find_mux_socket() {
+        debug!("mux socket found at {path} — connecting via mux only");
+        USED_MUX.store(true, Ordering::Relaxed);
+        let transport = MuxTransport::unix(&path, timeout)?;
+        let mut client = Client::new(AnyTransport::Mux(transport));
+        client.validate()?;
+        return Ok(client);
+    }
+
+    // No mux found on first attempt — direct USB serial (single non-blocking scan)
     let port_path =
         discovery::find_port().ok_or_else(|| anyhow::anyhow!("no DongLoRa device found (no mux, no USB device)"))?;
     debug!("opening serial port {port_path}");
