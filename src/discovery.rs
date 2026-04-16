@@ -1,10 +1,13 @@
 //! USB device discovery for DongLoRa dongles.
 //!
-//! Finds the serial port by matching USB VID:PID using the `serialport` crate.
+//! Finds the serial port by matching USB VID:PID. Re-uses
+//! `tokio_serial::available_ports` (which re-exports `mio-serial`'s
+//! implementation) rather than pulling in `serialport` as a second
+//! direct dep.
 
-use std::thread;
 use std::time::Duration;
 
+use tokio_serial::{SerialPortType, available_ports};
 use tracing::info;
 
 /// DongLoRa USB Vendor ID.
@@ -21,50 +24,54 @@ const BRIDGE_VID_PIDS: &[(u16, u16)] = &[
     (0x0403, 0x6001), // FT232R (FTDI)
 ];
 
-/// Find the DongLoRa serial port by USB VID:PID.
-///
-/// Checks for native USB CDC-ACM first (VID:PID 1209:5741), then falls
-/// back to known USB-UART bridge chips found on some board revisions.
-/// Returns the first matching port path, or `None` if no device is found.
-pub fn find_port() -> Option<String> {
-    let ports = serialport::available_ports().ok()?;
+/// How long to wait for USB enumeration to settle after a device
+/// appears but before we try to open the port. Empirically 300 ms is
+/// enough on Linux and macOS to avoid the first-open race.
+const USB_SETTLE: Duration = Duration::from_millis(300);
 
-    // Prefer native USB (our custom VID:PID)
+/// Poll interval for [`wait_for_device`].
+const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Non-blocking one-shot scan. Returns the port path of the first
+/// DongLoRa-like device present, or `None`.
+///
+/// Native VID:PID wins over known USB-UART bridges, so if both an
+/// original and a bridge-chip board are plugged in, the native one is
+/// selected.
+pub fn find_port() -> Option<String> {
+    let ports = available_ports().ok()?;
+
     if let Some(port) = ports.iter().find(|p| {
         matches!(
             &p.port_type,
-            serialport::SerialPortType::UsbPort(info)
-                if info.vid == USB_VID && info.pid == USB_PID
+            SerialPortType::UsbPort(info) if info.vid == USB_VID && info.pid == USB_PID
         )
     }) {
         return Some(port.port_name.clone());
     }
 
-    // Fall back to known USB-UART bridge chips
     ports
         .into_iter()
         .find(|p| {
             matches!(
                 &p.port_type,
-                serialport::SerialPortType::UsbPort(info)
-                    if BRIDGE_VID_PIDS.contains(&(info.vid, info.pid))
+                SerialPortType::UsbPort(info) if BRIDGE_VID_PIDS.contains(&(info.vid, info.pid))
             )
         })
         .map(|p| p.port_name)
 }
 
-/// Block until a DongLoRa device appears on USB.
-///
-/// Polls [`find_port`] every 500ms and returns the port path once found.
-pub fn wait_for_device() -> String {
+/// Await a DongLoRa device on USB. Polls [`find_port`] every 500 ms and
+/// returns when one appears. Does not time out — the caller is expected
+/// to wrap the future with `tokio::time::timeout` if that matters.
+pub async fn wait_for_device() -> String {
     info!("waiting for DongLoRa device...");
     loop {
         if let Some(port) = find_port() {
             info!("found device at {port}");
-            // Brief delay for USB enumeration to settle
-            thread::sleep(Duration::from_millis(300));
+            tokio::time::sleep(USB_SETTLE).await;
             return port;
         }
-        thread::sleep(Duration::from_millis(500));
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
 }

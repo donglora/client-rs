@@ -1,11 +1,11 @@
 [package]
 name = "donglora-client"
-version = "0.2.1"
+version = "1.0.0-alpha.1"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Stephen Waits <steve@waits.net>"]
 license = "MIT"
-description = "DongLoRa host library — connect, configure, send/receive LoRa packets"
+description = "DongLoRa host library — connect, configure, send/receive LoRa packets (DongLoRa Protocol v2)"
 repository = "https://github.com/donglora/client-rs"
 homepage = "https://github.com/donglora/client-rs"
 keywords = ["lora", "radio", "usb", "serial"]
@@ -13,10 +13,34 @@ categories = ["hardware-support"]
 exclude = ["CLAUDE_TODO.md", "deny.toml", "justfile", "mise.toml", "rustfmt.toml", ".jj"]
 
 [dependencies]
-anyhow = "1"
-ucobs = "0.3"
-serialport = "4"
+donglora-protocol = { path = "../protocol", default-features = false, features = ["std"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "io-util", "net"] }
+tokio-serial = "5"
+tokio-stream = "0.1"
 tracing = "0.1"
+rand = "0.9"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "io-util", "net", "test-util"] }
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Direct access to raw wire primitives for tests (frame encoder/decoder
+# helpers that are not part of the donglora-client public API).
+donglora-protocol = { path = "../protocol", default-features = false, features = ["std"] }
+heapless = "0.9"
+
+[[example]]
+name = "ping"
+required-features = []
+
+[[example]]
+name = "tx"
+required-features = []
+
+[[example]]
+name = "rx"
+required-features = []
 
 [lints.clippy]
 unwrap_used = "deny"
