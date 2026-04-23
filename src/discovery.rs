@@ -20,6 +20,7 @@ pub const USB_PID: u16 = 0x5741;
 const BRIDGE_VID_PIDS: &[(u16, u16)] = &[
     (0x10C4, 0xEA60), // CP2102 (Silicon Labs)
     (0x1A86, 0x55D4), // CH9102
+    (0x1A86, 0x7522), // CH340K — Elecrow ThinkNode-M2 ships with this
     (0x1A86, 0x7523), // CH340
     (0x0403, 0x6001), // FT232R (FTDI)
 ];

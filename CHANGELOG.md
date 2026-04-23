@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1 — 2026-04-22
+
+### Fixed
+
+- `discovery::find_port` / `wait_for_device` now match the WCH CH340K
+  USB-UART bridge (`1a86:7522`) and standard CH340 (`1a86:7523`) in
+  the `BRIDGE_VID_PIDS` list. The Elecrow ThinkNode-M2 board ships
+  with a CH340K bridge; previously only CP2102, CH9102, and FTDI
+  bridges were recognized, so `donglora-mux` and any other
+  `donglora-client` consumer reported "no device" on that board
+  even when the serial port was clearly present.
+
 ## 1.0.0 — 2026-04-22
 
 ### Breaking
