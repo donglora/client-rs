@@ -106,6 +106,14 @@ pub enum ClientError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// The requested config contains a field the device cannot satisfy.
+    /// Raised client-side, before `SET_CONFIG` hits the wire, for fields
+    /// that are *not* safe to silently auto-adjust (`freq_hz`, `sf`, `bw`).
+    /// `tx_power_dbm` is clamped transparently instead — "give me max"
+    /// returning less is universally expected and not worth a hard error.
+    #[error("config not supported by device: {reason}")]
+    ConfigNotSupported { reason: String },
+
     /// Catch-all for transport initialisation issues that don't have a
     /// dedicated variant.
     #[error("{0}")]

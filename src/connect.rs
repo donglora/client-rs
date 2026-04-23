@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use donglora_protocol::Modulation;
+use donglora_protocol::{Info, LoRaConfig, Modulation};
 use tracing::{debug, info};
 
 use crate::discovery;
@@ -380,7 +380,8 @@ async fn finalize<T: Transport>(
     let applied = if opts.auto_configure {
         match opts.config {
             Some(m) => {
-                let result = session.set_config(m, timeout).await?;
+                let prepared = prepare_config(&info, m)?;
+                let result = session.set_config(prepared, timeout).await?;
                 Some(result.current)
             }
             None => None,
@@ -390,4 +391,191 @@ async fn finalize<T: Transport>(
     };
 
     Ok(Dongle::new(session, info, kind, applied, opts.keepalive))
+}
+
+/// Validate and auto-adjust `modulation` against the device's advertised caps.
+///
+/// Per-field policy:
+///
+/// * `tx_power_dbm`: clamped into `[tx_power_min_dbm, tx_power_max_dbm]`.
+///   A clamp is logged at INFO — "give me max power" quietly returning
+///   less is the universally-expected behaviour and not worth a hard error.
+/// * `freq_hz`: rejected with [`ClientError::ConfigNotSupported`] when
+///   outside `[freq_min_hz, freq_max_hz]`. Silently shifting a 915 MHz
+///   request to 868 MHz (or vice versa) would cross regulatory boundaries.
+/// * `sf`, `bw`: rejected with [`ClientError::ConfigNotSupported`] when
+///   the corresponding capability bit isn't set. These change airtime and
+///   sensitivity dramatically; silent substitution is more confusing
+///   than helpful.
+///
+/// Non-LoRa modulations pass through untouched — the firmware rejects
+/// unsupported modulation IDs with `EMODULATION` on its own.
+pub(crate) fn prepare_config(info: &Info, modulation: Modulation) -> ClientResult<Modulation> {
+    let Modulation::LoRa(cfg) = modulation else {
+        return Ok(modulation);
+    };
+    Ok(Modulation::LoRa(prepare_lora_config(info, cfg)?))
+}
+
+fn prepare_lora_config(info: &Info, mut cfg: LoRaConfig) -> ClientResult<LoRaConfig> {
+    if cfg.freq_hz < info.freq_min_hz || cfg.freq_hz > info.freq_max_hz {
+        return Err(ClientError::ConfigNotSupported {
+            reason: format!(
+                "frequency {} Hz outside device range [{}, {}] Hz",
+                cfg.freq_hz, info.freq_min_hz, info.freq_max_hz
+            ),
+        });
+    }
+
+    if info.supported_sf_bitmap & (1u16 << cfg.sf) == 0 {
+        let supported: Vec<u8> = (0u8..16).filter(|i| info.supported_sf_bitmap & (1u16 << i) != 0).collect();
+        return Err(ClientError::ConfigNotSupported {
+            reason: format!("SF{} not supported by this device (supports SF{:?})", cfg.sf, supported),
+        });
+    }
+
+    let bw_bit = cfg.bw.as_u8();
+    if info.supported_bw_bitmap & (1u16 << bw_bit) == 0 {
+        return Err(ClientError::ConfigNotSupported {
+            reason: format!(
+                "bandwidth {:?} (bit {}) not in supported_bw_bitmap 0x{:04X}",
+                cfg.bw, bw_bit, info.supported_bw_bitmap
+            ),
+        });
+    }
+
+    if cfg.tx_power_dbm > info.tx_power_max_dbm {
+        info!(requested = cfg.tx_power_dbm, device_max = info.tx_power_max_dbm, "clamping tx_power_dbm to device max");
+        cfg.tx_power_dbm = info.tx_power_max_dbm;
+    } else if cfg.tx_power_dbm < info.tx_power_min_dbm {
+        info!(requested = cfg.tx_power_dbm, device_min = info.tx_power_min_dbm, "clamping tx_power_dbm to device min");
+        cfg.tx_power_dbm = info.tx_power_min_dbm;
+    }
+
+    Ok(cfg)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use donglora_protocol::{
+        FskConfig, LoRaBandwidth, LoRaCodingRate, LoRaHeaderMode, MAX_MCU_UID_LEN, MAX_RADIO_UID_LEN, RadioChipId,
+    };
+
+    fn info(tx_min: i8, tx_max: i8, freq_min: u32, freq_max: u32, sf_bm: u16, bw_bm: u16) -> Info {
+        Info {
+            proto_major: 1,
+            proto_minor: 0,
+            fw_major: 0,
+            fw_minor: 0,
+            fw_patch: 0,
+            radio_chip_id: RadioChipId::Sx1262.as_u16(),
+            capability_bitmap: donglora_protocol::cap::LORA,
+            supported_sf_bitmap: sf_bm,
+            supported_bw_bitmap: bw_bm,
+            max_payload_bytes: 255,
+            rx_queue_capacity: 32,
+            tx_queue_capacity: 1,
+            freq_min_hz: freq_min,
+            freq_max_hz: freq_max,
+            tx_power_min_dbm: tx_min,
+            tx_power_max_dbm: tx_max,
+            mcu_uid_len: 0,
+            mcu_uid: [0u8; MAX_MCU_UID_LEN],
+            radio_uid_len: 0,
+            radio_uid: [0u8; MAX_RADIO_UID_LEN],
+        }
+    }
+
+    fn lora(freq_hz: u32, sf: u8, bw: LoRaBandwidth, tx_power_dbm: i8) -> LoRaConfig {
+        LoRaConfig {
+            freq_hz,
+            sf,
+            bw,
+            cr: LoRaCodingRate::Cr4_5,
+            preamble_len: 8,
+            sync_word: 0x3444,
+            tx_power_dbm,
+            header_mode: LoRaHeaderMode::Explicit,
+            payload_crc: true,
+            iq_invert: false,
+        }
+    }
+
+    const SUB_GHZ_ALL_SF: u16 = 0x1FE0; // SF5..SF12
+    const SX127X_SF: u16 = 0x1FC0; // SF6..SF12
+    const SUB_GHZ_BW: u16 = 0x03FF; // BW 0..9
+
+    #[test]
+    fn tx_power_above_max_clamps_down() {
+        let i = info(-9, 20, 863_000_000, 928_000_000, SUB_GHZ_ALL_SF, SUB_GHZ_BW);
+        let cfg = lora(915_000_000, 7, LoRaBandwidth::Khz125, 30);
+        let Modulation::LoRa(out) = prepare_config(&i, Modulation::LoRa(cfg)).unwrap() else {
+            panic!("expected LoRa");
+        };
+        assert_eq!(out.tx_power_dbm, 20);
+        assert_eq!(out.freq_hz, 915_000_000);
+    }
+
+    #[test]
+    fn tx_power_below_min_clamps_up() {
+        let i = info(2, 20, 863_000_000, 928_000_000, SUB_GHZ_ALL_SF, SUB_GHZ_BW);
+        let cfg = lora(915_000_000, 7, LoRaBandwidth::Khz125, -30);
+        let Modulation::LoRa(out) = prepare_config(&i, Modulation::LoRa(cfg)).unwrap() else {
+            panic!("expected LoRa");
+        };
+        assert_eq!(out.tx_power_dbm, 2);
+    }
+
+    #[test]
+    fn tx_power_in_range_unchanged() {
+        let i = info(-9, 22, 863_000_000, 928_000_000, SUB_GHZ_ALL_SF, SUB_GHZ_BW);
+        let cfg = lora(915_000_000, 7, LoRaBandwidth::Khz125, 17);
+        let Modulation::LoRa(out) = prepare_config(&i, Modulation::LoRa(cfg)).unwrap() else {
+            panic!("expected LoRa");
+        };
+        assert_eq!(out.tx_power_dbm, 17);
+    }
+
+    #[test]
+    fn freq_out_of_range_rejected() {
+        let i = info(-9, 22, 863_000_000, 928_000_000, SUB_GHZ_ALL_SF, SUB_GHZ_BW);
+        let cfg = lora(300_000_000, 7, LoRaBandwidth::Khz125, 14);
+        let err = prepare_config(&i, Modulation::LoRa(cfg)).unwrap_err();
+        assert!(matches!(err, ClientError::ConfigNotSupported { ref reason } if reason.contains("frequency")));
+    }
+
+    #[test]
+    fn sf5_rejected_on_sx127x_bitmap() {
+        let i = info(2, 20, 863_000_000, 1_020_000_000, SX127X_SF, SUB_GHZ_BW);
+        let cfg = lora(915_000_000, 5, LoRaBandwidth::Khz125, 14);
+        let err = prepare_config(&i, Modulation::LoRa(cfg)).unwrap_err();
+        assert!(matches!(err, ClientError::ConfigNotSupported { ref reason } if reason.contains("SF5")));
+    }
+
+    #[test]
+    fn bw_not_in_bitmap_rejected() {
+        let i = info(-9, 22, 863_000_000, 928_000_000, SUB_GHZ_ALL_SF, SUB_GHZ_BW);
+        // Bw200 is bit 10 — SX128x only. Sub-GHz bitmap rejects it.
+        let cfg = lora(915_000_000, 7, LoRaBandwidth::Khz200, 14);
+        let err = prepare_config(&i, Modulation::LoRa(cfg)).unwrap_err();
+        assert!(matches!(err, ClientError::ConfigNotSupported { ref reason } if reason.contains("bandwidth")));
+    }
+
+    #[test]
+    fn non_lora_modulation_passes_through() {
+        let i = info(-9, 22, 863_000_000, 928_000_000, SUB_GHZ_ALL_SF, SUB_GHZ_BW);
+        let fsk = FskConfig {
+            freq_hz: 50_000_000, // well outside info range — must not be inspected
+            bitrate_bps: 50_000,
+            freq_dev_hz: 25_000,
+            rx_bw: 0,
+            preamble_len: 16,
+            sync_word_len: 0,
+            sync_word: [0u8; 8],
+        };
+        let out = prepare_config(&i, Modulation::FskGfsk(fsk)).unwrap();
+        assert!(matches!(out, Modulation::FskGfsk(_)));
+    }
 }

@@ -400,6 +400,7 @@ impl ClientError {
             Self::BadFrame(s) => Self::BadFrame(s.clone()),
             Self::EncodeFailed(s) => Self::EncodeFailed(s.clone()),
             Self::Io(e) => Self::Other(format!("io: {e}")),
+            Self::ConfigNotSupported { reason } => Self::ConfigNotSupported { reason: reason.clone() },
             Self::Other(s) => Self::Other(s.clone()),
         }
     }

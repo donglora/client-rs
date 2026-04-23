@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.0 — 2026-04-23
+
+### Added
+
+- `connect()` now validates and auto-adjusts the requested LoRa
+  config against the device's advertised caps (`GET_INFO`), matching
+  the behaviour just landed in client-py 1.1.0:
+  - `tx_power_dbm` is silently clamped into
+    `[tx_power_min_dbm, tx_power_max_dbm]`. Clamps are logged at
+    INFO via `tracing`. `ConnectOptions::config(cfg)` now "just works"
+    on boards with lower PA ceilings (e.g. SX1276 @ 20 dBm vs
+    SX1262 @ 22 dBm) with no per-board bookkeeping.
+  - `freq_hz` outside the device's range, `sf` not in
+    `supported_sf_bitmap`, or `bw` not in `supported_bw_bitmap` now
+    return `ClientError::ConfigNotSupported` *before* `SET_CONFIG`
+    hits the wire. Silent shifts here would cross regulatory
+    boundaries or change airtime/sensitivity without the caller
+    noticing.
+  - `Dongle::config()` continues to reflect `SetConfigResult.current`
+    — the modulation the device actually stored, post-clamp.
+- New `ClientError::ConfigNotSupported { reason }` variant.
+
 ## 1.0.2 — 2026-04-23
 
 ### Changed
