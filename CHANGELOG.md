@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.2 — 2026-04-23
+
+### Changed
+
+- `donglora-protocol` dependency spec loosened from `"1.0.0"` to `"1"`.
+  The resolver already accepted any `1.x.y` (both specs mean `^1.0.0`),
+  but the `"1"` form signals intent: any 1.x release of the protocol
+  crate is accepted without requiring a fresh `donglora-client`
+  publication. Behavior unchanged.
+
 ## 1.0.1 — 2026-04-22
 
 ### Fixed

@@ -1,6 +1,6 @@
 [package]
 name = "donglora-client"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Stephen Waits <steve@waits.net>"]
@@ -13,7 +13,7 @@ categories = ["hardware-support"]
 exclude = ["CLAUDE_TODO.md", "deny.toml", "justfile", "mise.toml", "rustfmt.toml", ".jj"]
 
 [dependencies]
-donglora-protocol = { version = "1.0.0", default-features = false, features = ["std"] }
+donglora-protocol = { version = "1", default-features = false, features = ["std"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "io-util", "net"] }
 tokio-serial = "5"
@@ -27,7 +27,7 @@ anyhow = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Direct access to raw wire primitives for tests (frame encoder/decoder
 # helpers that are not part of the donglora-client public API).
-donglora-protocol = { version = "1.0.0", default-features = false, features = ["std"] }
+donglora-protocol = { version = "1", default-features = false, features = ["std"] }
 heapless = "0.9"
 
 [[example]]
