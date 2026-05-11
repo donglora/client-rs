@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.1 — 2026-05-11
+
+### Changed
+
+- Refreshed `Cargo.lock` to pull in the latest compatible patch
+  releases of dependencies:
+  - `donglora-protocol` 1.0.0 → 1.2.0 (range `"1"` unchanged)
+  - `tokio` 1.52.1 → 1.52.3
+  - `libc` 0.2.184 → 0.2.186
+  - `bitflags` 2.11.0 → 2.11.1
+  No source changes; public API is unchanged.
+
 ## 1.1.0 — 2026-04-23
 
 ### Added
